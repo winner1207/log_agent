@@ -1,0 +1,20 @@
+# Maven
+target
+.flattened-pom.xml
+
+# IDE
+.idea
+.vscode/
+.cursor/
+
+# Log files
+data
+notification_logs
+
+# Docker runtime data and configurations
+/docker/*
+!/docker/sql/
+!/docker/nginx/
+
+# Other generated files
+.env
