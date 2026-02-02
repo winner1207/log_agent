@@ -132,7 +132,7 @@ DEEPSEEK_MODEL_ID=deepseek-chat
 DINGTALK_ACCESS_TOKEN=your-token
 DINGTALK_SECRET=your-secret
 # 值班人员手机号，多个用逗号分隔，用于 P1/P2 级别告警 @
-DINGTALK_ON_DUTY_MOBILES=18180861207,13883578974
+DINGTALK_ON_DUTY_MOBILES=
 
 # 日志诊断配置
 LOG_ENVIRONMENT=prod              # dev/test/prod
