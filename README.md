@@ -98,17 +98,20 @@ source venv/bin/activate
 python --version
 
 # 安装依赖
-pip install -r requirements.txt
+pip install -r requirements.txt --upgrade
 ```
 
 或手动安装指定版本：
 
 ```bash
 # 核心依赖 (指定稳定版本)
-pip install langchain==0.2.16 langchain-community==0.2.16 langchain-core==0.2.38 langchain-openai==0.1.23
+pip install langchain==0.2.16 langchain-community==0.2.16 langchain-core==0.2.38 langchain-openai==0.1.23 langchain-text-splitters==0.2.4 --upgrade
+
+# Gemini 依赖
+pip install langchain-google-genai>=4.0.0 --upgrade
 
 # 工具依赖
-pip install python-dotenv requests pydantic psutil
+pip install python-dotenv requests pydantic psutil httpx
 ```
 
 ### 3. 配置环境变量
@@ -118,7 +121,9 @@ pip install python-dotenv requests pydantic psutil
 **⚠️ 关键提示**: 确保 `LOG_DIRECTORY` 指向一个**真实存在**的日志目录，且目录中包含 `.log` 文件。
 
 ```env
-# LLM 配置（推荐使用 DeepSeek）
+# LLM 配置（Gemini 为主、DeepSeek 为备，系统自动检测）
+GOOGLE_API_KEY=你的Google AI Studio密钥
+LLM_MODEL=gemini-3-flash-preview
 DEEPSEEK_API_KEY=your-api-key
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL_ID=deepseek-chat
@@ -138,7 +143,15 @@ AGENT_TEMPERATURE=0.3             # 0.0-1.0，越小分析越严谨
 AGENT_MAX_ITERATIONS=15           # ReAct 最大推理步数
 AGENT_ENABLE_ALERT_BUFFER=true    # true:启用防骙扰缓冲; false:实时发送
 AGENT_ENABLE_NOTIFICATIONS=true   # 全局通知开关
+
+# (可选) 网络代理配置 (用于网络受限环境)
+HTTPS_PROXY=http://127.0.0.1:7890
+HTTP_PROXY=http://127.0.0.1:7890
 ```
+
+**模型配置说明**：
+- 系统会自动检测 Gemini API 的可用性。若 Gemini 可用，优先使用 Gemini；否则自动回退至 DeepSeek。
+- Gemini 和 DeepSeek 均支持代理配置，帮助在网络受限环境下联通外网。
 
 ### 4. 运行诊断
 
@@ -270,6 +283,10 @@ log_agent/
 ├── agent/
 │   ├── __init__.py
 │   └── iot_diagnosis_agent.py      # AI 诊断 Agent 主类
+├── llm/                            # LLM 模型实现 (独立管理)
+│   ├── __init__.py
+│   ├── llm_gemini.py               # Gemini LLM 实现与解析
+│   └── llm_deepseek.py             # DeepSeek LLM 实现与解析
 ├── tools/
 │   ├── log_reader.py               # 基础日志读取工具
 │   ├── device_anomaly_analyzer.py  # 设备流量与频率分析工具 (核心：30w 行/秒级反向分析)
@@ -308,7 +325,7 @@ Agent 不仅仅是“报错复读机”，它能理解服务间的依赖关系�
 
 | 风险项 | 说明 | 影响 | 优化建议 |
 |--------|------|------|--------|
-| **LLM API 调用** | 每次诊断会调用 DeepSeek/OpenAI API，可能 3-5s 延迟 | 网络波动可能导致推理变慢 | 先检查 DNS、网络连接；适度降低迭代次数 |
+| **LLM API 调用** | 每次诊断会调用 Gemini/DeepSeek API，可能 1-3s 延迟 | 网络波动可能导致推理变慢 | 先检查 DNS、网络连接；日志上有 LLM 模型选择信息 |
 | **大规模日志扫描** | `device_anomaly_analyzer` 扫描上限 30w 行 | 处理不当会导致 CPU 峰值 | 已实现**反向块读取**与**时间窗口早停**，极大降低 I/O |
 | **大日志文件处理** | 100MB+ 的日志文件会占用大量内存 | 可能触发 OOM 或 I/O 阻塞 | 保证日志目录不超过 50GB；定期清理过期日志 |
 | **多文件并发读取** | 预设 16 个日志文件，每个最多 100 行 | 总计 ~1.6K 行文本，不会超过 Token 限制 | 不用调整，已优化 |
@@ -420,10 +437,10 @@ AGENT_ENABLE_NOTIFICATIONS=true
 
 ## 版本信息
 
-- **版本**：2.3.0
-- **更新日期**：2026-01-20
+- **版本**：2.4.1
+- **更新日期**：2026-02-02
 - **Python 版本**：3.10 或 3.12
-- **LangChain 版本**：0.2.16 (已锁定)
+- **LangChain 版本**：0.2.16 (使用 AgentExecutor)
 - **运行平台**：Windows / Linux
 
 ## 许可证

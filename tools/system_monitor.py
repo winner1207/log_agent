@@ -5,6 +5,13 @@ import os
 import psutil
 from langchain_core.tools import tool
 from typing import Dict, Any
+from dotenv import load_dotenv
+
+# 加载环境变量
+load_dotenv()
+
+# 磁盘空间告警阈值
+DISK_USAGE_THRESHOLD = int(os.getenv("DISK_USAGE_THRESHOLD", "80"))
 
 # Define common Java service processes
 COMMON_SERVICES = {
@@ -201,14 +208,14 @@ def check_system_status(query: str = "") -> str:
             f"\n- **CPU使用率**: {cpu_percent}% ({cpu_count}核心) {'✅ 正常' if cpu_percent < 80 else '⚠️ 负载高'}",
             f"- **内存使用率**: {memory.percent}% (可用 {memory.available/(1024**3):.2f} GB / 总计 {memory.total/(1024**3):.2f} GB) {'✅ 正常' if memory.percent < 85 else '⚠️ 内存紧张'}",
             thread_info,
-            "- **磁盘状态**:"
+            f"- **磁盘状态** (告警阈值: {DISK_USAGE_THRESHOLD}%):"
         ]
         
         if not disk_usage_list:
             result.append("  - 无法获取磁盘状态")
         else:
             for disk in disk_usage_list:
-                status = "✅ 正常" if disk['percent'] < 80 else "🚨 空间不足"
+                status = "✅ 正常" if disk['percent'] < DISK_USAGE_THRESHOLD else "🚨 空间不足"
                 result.append(f"  - {disk['mountpoint']} 分区: {disk['percent']}% (空闲 {disk['free']:.2f} GB) {status}")
         
         # 如果线程数异常，追加详细列表供 LLM 诊断

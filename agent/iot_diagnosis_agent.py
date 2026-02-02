@@ -13,10 +13,12 @@ import os
 from typing import List, Optional, Dict, Any
 from dotenv import load_dotenv
 
-from langchain_openai import ChatOpenAI
 from langchain.agents import AgentExecutor, create_react_agent
 from langchain_core.prompts import PromptTemplate
 from langchain_core.tools import BaseTool
+
+from llm.llm_gemini import check_gemini_available, get_gemini_llm, parse_gemini_response
+from llm.llm_deepseek import get_deepseek_llm
 
 from tools.code_interpreter import execute_analysis_code, calculate_frequency_analysis
 from tools.stack_trace_cleaner import clean_java_stacktrace, format_for_llm
@@ -67,13 +69,23 @@ class IotDiagnosisAgent:
         # 加载环境变量
         load_dotenv()
         
-        # 配置 API 参数
+        # 初始化 LLM 选择标志
+        self._use_gemini = check_gemini_available()
+        
+        # 配置 API 参数（仅保留备选）
         self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY", "")
         self.base_url = base_url or os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
         self.model_id = model_id or os.getenv("DEEPSEEK_MODEL_ID", "deepseek-chat")
         self.temperature = temperature
         self.max_iterations = max_iterations
         self.verbose = verbose
+        
+        # 日志打印 LLM 选择
+        if self.verbose:
+            if self._use_gemini:
+                print("[LLM] Gemini API 可用 ✓")
+            else:
+                print("[LLM] Gemini API 不可用，已回退至 DeepSeek")
         
         # 初始化告警缓冲池
         self.alert_buffer = AlertBuffer() if enable_alert_buffer else None
@@ -103,15 +115,17 @@ class IotDiagnosisAgent:
         # 创建 Agent 执行器
         self.agent_executor = self._create_agent_executor()
     
-    def _initialize_llm(self) -> ChatOpenAI:
-        """初始化大语言模型"""
-        return ChatOpenAI(
-            model=self.model_id,
-            openai_api_key=self.api_key,
-            openai_api_base=self.base_url,
-            temperature=self.temperature,
-            verbose=self.verbose
-        )
+    def _initialize_llm(self):
+        """初始化大语言模型，策略：Gemini 优先，DeepSeek 备选"""
+        if self._use_gemini:
+            return get_gemini_llm(self.temperature)
+        return get_deepseek_llm(self.temperature)
+    
+    def _parse_llm_response(self, content):
+        """统一解析入口，根据当前使用的模型调用对应的解析实现"""
+        if self._use_gemini:
+            return parse_gemini_response(content)
+        return parse_deepseek_response(content)
     
     def _initialize_tools(self) -> List[BaseTool]:
         """初始化工具列表"""
@@ -155,12 +169,13 @@ class IotDiagnosisAgent:
 
 【故障分析方法】（必须严格按顺序执行）
 1. **第一步**：检查业务服务监控 (check_service_status) 和系统资源状态 (check_system_status)，这是必须完成的基础步骤。
-2. **第二步**：调用 `analyze_device_anomalies` 工具分析设备异常，检查是否存在超高频上报设备（>30次/分钟）。这必须在日报中体现。
-3. **第三步**：识别宕机服务后，优先读取对应的日志文件进行错误模式分析。
-4. **特别注意 RocketMQ**: 如果在根日志目录找不到 `rocketmq.log` 或其内容为空，必须意识到 RocketMQ 日志可能存储在 `rocketmqlogs/rocketmq_client.log`。
-5. 识别错误模式和异常堆栈。
-6. 分析时间序列和级联关系。
-7. **防错指南**: 如果诊断过程中发现信息量过大（如日志读取了数百行），不要尝试处理每一行，应立即总结核心错误（如 Timeout, Connection Refused, Exception）并给出 Final Answer。不要陷入无限循环或过度分析。
+2. **如果发现磁盘空间使用率超过 `check_system_status` 输出中显示的阈值（见"磁盘状态"行括号内的值），立即调用 `clean_app_logs` 工具清理日志**，这是自主维护的核心职责，不能等到最后。清理完成后继续后续分析。
+3. **第二步**：调用 `analyze_device_anomalies` 工具分析设备异常，检查是否存在超高频上报设备（>30次/分钟）。这必须在日报中体现。
+4. **第三步**：识别宕机服务后，优先读取对应的日志文件进行错误模式分析。
+5. **特别注意 RocketMQ**: 如果在根日志目录找不到 `rocketmq.log` 或其内容为空，必须意识到 RocketMQ 日志可能存储在 `rocketmqlogs/rocketmq_client.log`。
+6. 识别错误模式和异常堆栈。
+7. 分析时间序列和级联关系。
+8. **防错指南**: 如果诊断过程中发现信息量过大（如日志读取了数百行），不要尝试处理每一行，应立即总结核心错误（如 Timeout, Connection Refused, Exception）并给出 Final Answer。不要陷入无限循环或过度分析。
 
 【输出格式要求】
 Final Answer 必须是一个有效的 JSON 对象，必须包含：
@@ -253,39 +268,10 @@ Thought: {agent_scratchpad}
         Returns:
             包含诊断结果的字典，包括 'input' 和 'output' 字段
         """
-        try:
-            result = self.agent_executor.invoke({"input": query})
-            # 确保 output 字段存在
-            if "output" not in result:
-                result["output"] = str(result)
-            return result
-        except KeyError as e:
-            # 配置错误或环境变量缺失
-            error_output = f"配置错误: {str(e)}"
-            self._handle_diagnosis_error(query, "KeyError", str(e))
-            return {
-                "input": query,
-                "output": error_output
-            }
-        except ValueError as e:
-            # 参数验证错误
-            error_output = f"参数错误: {str(e)}"
-            self._handle_diagnosis_error(query, "ValueError", str(e))
-            return {
-                "input": query,
-                "output": error_output
-            }
-        except Exception as e:
-            # 其他未预期的错误
-            error_output = f"诊断过程中发生错误: {str(e)}"
-            self._handle_diagnosis_error(query, type(e).__name__, str(e))
-            import traceback
-            if self.verbose:
-                traceback.print_exc()
-            return {
-                "input": query,
-                "output": error_output
-            }
+        result = self.agent_executor.invoke({"input": query})
+        if "output" not in result:
+            result["output"] = str(result)
+        return result
     
     def get_diagnosis_report(self, query: str) -> str:
         """
